@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -16,18 +16,23 @@ from cloud_incident_rca_agent.domain import (
     RCAReport,
 )
 
+TModel = TypeVar("TModel", bound=BaseModel)
+
 
 class LLMClient(Protocol):
     """Provider-neutral structured reasoning contract."""
 
     async def normalize_incident(self, raw_description: str) -> Incident:
         """Return a normalized incident from raw user input."""
+        ...
 
     async def classify_incident(self, incident: Incident) -> Incident:
         """Return the incident with issue category and signals populated."""
+        ...
 
     async def create_plan(self, incident: Incident) -> InvestigationPlan:
         """Return a bounded investigation plan."""
+        ...
 
     async def update_hypotheses(
         self,
@@ -37,6 +42,7 @@ class LLMClient(Protocol):
         evidence: list[Evidence],
     ) -> list[Hypothesis]:
         """Return updated candidate hypotheses."""
+        ...
 
     async def build_report(
         self,
@@ -47,6 +53,11 @@ class LLMClient(Protocol):
         remaining_unknowns: list[str],
     ) -> RCAReport:
         """Return the final structured RCA report."""
+        ...
+
+
+class _HypothesisListPayload(BaseModel):
+    hypotheses: list[Hypothesis]
 
 
 class FakeLLMClient:
@@ -156,7 +167,9 @@ class OpenAILLMClient:
         self._client = client
         self._model = model
 
-    async def _parse_json_model(self, prompt: str, model_type: type[BaseModel]) -> BaseModel:
+    async def invoke_json(self, prompt: str, model_type: type[TModel]) -> TModel:
+        """Invoke the OpenAI API and validate the JSON response as a Pydantic model."""
+
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
@@ -174,21 +187,21 @@ class OpenAILLMClient:
             "Normalize this cloud incident into JSON matching the Incident schema. "
             f"Raw description: {raw_description}"
         )
-        return await self._parse_json_model(prompt, Incident)  # type: ignore[return-value]
+        return await self.invoke_json(prompt, Incident)
 
     async def classify_incident(self, incident: Incident) -> Incident:
         prompt = (
             "Classify this cloud incident and return JSON matching the Incident schema. "
             f"Incident: {incident.model_dump(mode='json')}"
         )
-        return await self._parse_json_model(prompt, Incident)  # type: ignore[return-value]
+        return await self.invoke_json(prompt, Incident)
 
     async def create_plan(self, incident: Incident) -> InvestigationPlan:
         prompt = (
             "Create a bounded cloud incident investigation plan as JSON matching the "
             f"InvestigationPlan schema. Incident: {incident.model_dump(mode='json')}"
         )
-        return await self._parse_json_model(prompt, InvestigationPlan)  # type: ignore[return-value]
+        return await self.invoke_json(prompt, InvestigationPlan)
 
     async def update_hypotheses(
         self,
@@ -203,13 +216,8 @@ class OpenAILLMClient:
             f"Existing hypotheses: {[item.model_dump(mode='json') for item in existing_hypotheses]}. "
             f"Evidence: {[item.model_dump(mode='json') for item in evidence]}."
         )
-        result = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
-        payload = json.loads(result.choices[0].message.content or "{}")
-        return [Hypothesis.model_validate(item) for item in payload.get("hypotheses", [])]
+        result = await self.invoke_json(prompt, _HypothesisListPayload)
+        return result.hypotheses
 
     async def build_report(
         self,
@@ -226,4 +234,4 @@ class OpenAILLMClient:
             f"Evidence summaries: {[item.summary for item in evidence]}. "
             f"Remaining unknowns: {remaining_unknowns}."
         )
-        return await self._parse_json_model(prompt, RCAReport)  # type: ignore[return-value]
+        return await self.invoke_json(prompt, RCAReport)
