@@ -9,7 +9,10 @@ from cloud_incident_rca_agent.domain import (
     HumanReviewDecision,
     HumanReviewDecisionStatus,
     HumanReviewRequest,
+    Incident,
     InvestigationPlan,
+    InvestigationState,
+    OrchestratorRunResult,
     RiskLevel,
     ToolIntent,
     ToolResult,
@@ -34,6 +37,33 @@ def test_investigation_plan_rejects_empty_tool_intents() -> None:
         InvestigationPlan(summary="collect initial evidence", tool_intents=[])
 
 
+def test_investigation_plan_infers_review_requirement_and_reason() -> None:
+    intent = ToolIntent(
+        target=ToolTarget.MYSQL,
+        tool_name="query",
+        purpose="inspect potentially sensitive customer records",
+        sensitive=True,
+    )
+
+    plan = InvestigationPlan(
+        summary="collect customer impact evidence",
+        tool_intents=[intent],
+    )
+
+    assert plan.requires_human_review is True
+    assert plan.review_reason == "plan includes actions that require human approval"
+
+
+def test_tool_intent_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        ToolIntent(
+            target=ToolTarget.CLS_LOG_MCP,
+            tool_name="search_logs_by_trace_id",
+            purpose="inspect trace logs",
+            unexpected="value",
+        )
+
+
 def test_connector_error_retryable_defaults_from_category() -> None:
     transient = ConnectorError(
         category=ConnectorErrorCategory.TRANSIENT,
@@ -43,9 +73,19 @@ def test_connector_error_retryable_defaults_from_category() -> None:
         category=ConnectorErrorCategory.PERMANENT,
         message="unknown connector",
     )
+    semantic = ConnectorError(
+        category=ConnectorErrorCategory.SEMANTIC,
+        message="invalid trace id",
+    )
+    policy = ConnectorError(
+        category=ConnectorErrorCategory.POLICY,
+        message="human approval required",
+    )
 
     assert transient.retryable is True
     assert permanent.retryable is False
+    assert semantic.retryable is False
+    assert policy.retryable is False
 
 
 def test_tool_result_requires_evidence_for_success_and_error_for_failure() -> None:
@@ -81,6 +121,18 @@ def test_human_review_request_stores_affected_intents_and_requires_decision() ->
 
     assert request.affected_tool_intent_ids == ["intent_a", "intent_b"]
     assert request.requires_decision is True
+
+
+def test_orchestrator_run_result_is_exported_and_accepts_state() -> None:
+    state = InvestigationState(
+        incident=Incident(raw_description="checkout API returns 500"),
+    )
+
+    result = OrchestratorRunResult(state=state)
+
+    assert result.state is state
+    assert result.report is None
+    assert result.pending_review is None
 
 
 def test_successful_tool_result_accepts_evidence() -> None:
