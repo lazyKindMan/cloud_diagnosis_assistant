@@ -51,3 +51,37 @@ class ConfidenceLevel(StrEnum):
     HIGH = "High"
     MEDIUM = "Medium"
     LOW = "Low"
+
+
+class ToolTarget(StrEnum):
+    """External systems that tool intents can target."""
+
+    CLS_LOG_MCP = "cls-log-mcp"
+    CHROME = "Chrome"
+    MYSQL = "MySQL"
+    OTHER = "other"
+
+
+class ConnectorErrorCategory(StrEnum):
+    """Operational class for connector failures."""
+
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+    SEMANTIC = "semantic"
+    POLICY = "policy"
+
+
+class RiskLevel(StrEnum):
+    """Risk level assigned to human review requests."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class HumanReviewDecisionStatus(StrEnum):
+    """Reviewer decision state for gated orchestration actions."""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    APPROVED_WITH_MODIFICATIONS = "approved_with_modifications"

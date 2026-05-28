@@ -10,10 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from cloud_incident_rca_agent.domain.types import (
     ConfidenceLevel,
+    ConnectorErrorCategory,
     EvidenceImplication,
     EvidenceSource,
+    HumanReviewDecisionStatus,
     HypothesisStatus,
     InvestigationStatus,
+    RiskLevel,
+    ToolTarget,
 )
 
 
@@ -130,3 +134,130 @@ class RCAReport(StrictDomainModel):
     ruled_out_alternatives: list[str] = Field(default_factory=list)
     remaining_unknowns: list[str] = Field(default_factory=list)
     recommended_next_actions: list[str] = Field(default_factory=list)
+
+
+class ToolIntent(StrictDomainModel):
+    """Planned connector or browser action proposed by the orchestrator."""
+
+    intent_id: str = Field(default_factory=lambda: _new_id("intent"))
+    target: ToolTarget
+    tool_name: str = Field(min_length=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    purpose: str = Field(min_length=1)
+    sensitive: bool = False
+    requires_human_review: bool = False
+
+    @model_validator(mode="after")
+    def require_review_for_sensitive_actions(self) -> "ToolIntent":
+        if self.sensitive:
+            object.__setattr__(self, "requires_human_review", True)
+        return self
+
+
+class ConnectorError(StrictDomainModel):
+    """Structured connector failure safe to pass through orchestration state."""
+
+    category: ConnectorErrorCategory
+    message: str = Field(min_length=1)
+    retryable: bool | None = None
+    safe_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def default_retryable_from_category(self) -> "ConnectorError":
+        if self.retryable is None:
+            object.__setattr__(
+                self,
+                "retryable",
+                self.category == ConnectorErrorCategory.TRANSIENT,
+            )
+        return self
+
+
+class ToolResult(StrictDomainModel):
+    """Outcome of executing a planned tool intent."""
+
+    intent_id: str = Field(min_length=1)
+    success: bool
+    evidence: list[Evidence] = Field(default_factory=list)
+    connector_error: ConnectorError | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome_payload(self) -> "ToolResult":
+        if self.success and not self.evidence:
+            raise ValueError("successful tool results require evidence")
+        if not self.success and self.connector_error is None:
+            raise ValueError("failed tool results require connector_error")
+        return self
+
+
+class InvestigationPlan(StrictDomainModel):
+    """Bounded set of tool intents and stopping rules for an investigation."""
+
+    plan_id: str = Field(default_factory=lambda: _new_id("plan"))
+    summary: str = Field(min_length=1)
+    tool_intents: list[ToolIntent] = Field(min_length=1)
+    max_tool_calls: int = Field(default=5, ge=0)
+    stopping_criteria: list[str] = Field(default_factory=list)
+    requires_human_review: bool = False
+    review_reason: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_tool_intents(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("tool_intents") == []:
+            raise ValueError("tool_intents must contain at least one intent")
+        return data
+
+    @model_validator(mode="after")
+    def infer_human_review_requirement(self) -> "InvestigationPlan":
+        if any(intent.requires_human_review for intent in self.tool_intents):
+            object.__setattr__(self, "requires_human_review", True)
+        if self.requires_human_review and self.review_reason is None:
+            object.__setattr__(
+                self,
+                "review_reason",
+                "plan includes actions that require human approval",
+            )
+        return self
+
+
+class HumanReviewRequest(StrictDomainModel):
+    """Request for a human decision before performing a risky action."""
+
+    request_id: str = Field(default_factory=lambda: _new_id("review"))
+    reason: str = Field(min_length=1)
+    proposed_action: str = Field(min_length=1)
+    risk_level: RiskLevel
+    alternatives: list[str] = Field(default_factory=list)
+    recommended_option: str = Field(min_length=1)
+    affected_tool_intent_ids: list[str] = Field(default_factory=list)
+    requires_decision: bool = True
+
+
+class HumanReviewDecision(StrictDomainModel):
+    """Decision recorded by a reviewer for a human review request."""
+
+    request_id: str = Field(min_length=1)
+    status: HumanReviewDecisionStatus
+    reviewer_note: str | None = None
+    modified_tool_intents: list[ToolIntent] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_modifications_when_modified_approval(self) -> "HumanReviewDecision":
+        if (
+            self.status == HumanReviewDecisionStatus.APPROVED_WITH_MODIFICATIONS
+            and not self.modified_tool_intents
+        ):
+            raise ValueError(
+                "modified_tool_intents are required for approved_with_modifications"
+            )
+        return self
+
+
+class OrchestratorRunResult(StrictDomainModel):
+    """Top-level result returned by an orchestrator run."""
+
+    state: InvestigationState
+    report: RCAReport | None = None
+    pending_review: HumanReviewRequest | None = None
+    blocked_reason: str | None = None
