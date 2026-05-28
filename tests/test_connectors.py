@@ -2,6 +2,8 @@ import pytest
 
 from cloud_incident_rca_agent.connectors import (
     CallableMCPClient,
+    ChromeMCPConnector,
+    ClsLogMCPConnector,
     MySQLMCPConnector,
     is_read_only_sql,
 )
@@ -53,3 +55,51 @@ async def test_mysql_connector_rejects_write_query_before_calling_client() -> No
     assert result.connector_error is not None
     assert result.connector_error.category == "policy"
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cls_log_connector_normalizes_payload_to_evidence() -> None:
+    client = RecordingMCPClient(
+        response={
+            "summary": "trace had repeated persistence failures",
+            "trace_id": "trace-123",
+            "events": [{"level": "ERROR", "message": "write failed"}],
+        }
+    )
+    connector = ClsLogMCPConnector(client)
+    result = await connector.execute(
+        ToolIntent(
+            target=ToolTarget.CLS_LOG_MCP,
+            tool_name="search_logs_by_trace_id",
+            parameters={"trace_id": "trace-123"},
+            purpose="inspect logs",
+        )
+    )
+
+    assert result.success is True
+    assert result.evidence[0].source == "cls-log-mcp"
+    assert result.evidence[0].trace_id == "trace-123"
+    assert result.evidence[0].summary == "trace had repeated persistence failures"
+
+
+@pytest.mark.asyncio
+async def test_chrome_connector_normalizes_inspection_payload() -> None:
+    client = RecordingMCPClient(
+        response={
+            "summary": "deployment panel shows config changed",
+            "url": "https://console.example/deployments",
+        }
+    )
+    connector = ChromeMCPConnector(client)
+    result = await connector.execute(
+        ToolIntent(
+            target=ToolTarget.CHROME,
+            tool_name="inspect_page",
+            parameters={"url": "https://console.example/deployments"},
+            purpose="inspect deployment state",
+        )
+    )
+
+    assert result.success is True
+    assert result.evidence[0].source == "Chrome"
+    assert result.evidence[0].summary == "deployment panel shows config changed"
