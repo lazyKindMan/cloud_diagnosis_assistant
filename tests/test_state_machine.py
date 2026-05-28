@@ -60,3 +60,49 @@ def test_terminal_states_have_no_next_states() -> None:
     assert machine.next_states(InvestigationStatus.DONE) == frozenset()
     assert machine.next_states(InvestigationStatus.BLOCKED) == frozenset()
     assert machine.next_states(InvestigationStatus.FAILED) == frozenset()
+
+
+def test_plan_can_enter_human_review_and_continue_when_approved() -> None:
+    state = InvestigationState(incident=Incident(raw_description="checkout API returns 500"))
+    machine = InvestigationStateMachine()
+
+    for next_state in [
+        InvestigationStatus.CLASSIFY,
+        InvestigationStatus.PLAN,
+        InvestigationStatus.HUMAN_REVIEW,
+        InvestigationStatus.COLLECT_EVIDENCE,
+    ]:
+        machine.transition(state, next_state)
+
+    assert state.current_state == InvestigationStatus.COLLECT_EVIDENCE
+
+
+def test_human_review_rejection_can_return_to_plan() -> None:
+    state = InvestigationState(incident=Incident(raw_description="payments are inconsistent"))
+    machine = InvestigationStateMachine()
+
+    for next_state in [
+        InvestigationStatus.CLASSIFY,
+        InvestigationStatus.PLAN,
+        InvestigationStatus.HUMAN_REVIEW,
+        InvestigationStatus.PLAN,
+    ]:
+        machine.transition(state, next_state)
+
+    assert state.current_state == InvestigationStatus.PLAN
+
+
+def test_human_review_can_block_when_approval_is_unavailable() -> None:
+    state = InvestigationState(incident=Incident(raw_description="orders API times out"))
+    machine = InvestigationStateMachine()
+
+    for next_state in [
+        InvestigationStatus.CLASSIFY,
+        InvestigationStatus.PLAN,
+        InvestigationStatus.HUMAN_REVIEW,
+        InvestigationStatus.BLOCKED,
+    ]:
+        machine.transition(state, next_state)
+
+    assert state.current_state == InvestigationStatus.BLOCKED
+    assert machine.is_terminal(state.current_state)

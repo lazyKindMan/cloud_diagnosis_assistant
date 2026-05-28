@@ -41,6 +41,7 @@ class InvestigationStateMachine:
         InvestigationStatus.PLAN: frozenset(
             {
                 InvestigationStatus.COLLECT_EVIDENCE,
+                InvestigationStatus.HUMAN_REVIEW,
                 InvestigationStatus.BLOCKED,
                 InvestigationStatus.FAILED,
             }
@@ -62,13 +63,25 @@ class InvestigationStateMachine:
         InvestigationStatus.VERIFY: frozenset(
             {
                 InvestigationStatus.COLLECT_EVIDENCE,
+                InvestigationStatus.HUMAN_REVIEW,
                 InvestigationStatus.SUMMARIZE,
+                InvestigationStatus.BLOCKED,
+                InvestigationStatus.FAILED,
+            }
+        ),
+        InvestigationStatus.HUMAN_REVIEW: frozenset(
+            {
+                InvestigationStatus.PLAN,
+                InvestigationStatus.COLLECT_EVIDENCE,
+                InvestigationStatus.SUMMARIZE,
+                InvestigationStatus.DONE,
                 InvestigationStatus.BLOCKED,
                 InvestigationStatus.FAILED,
             }
         ),
         InvestigationStatus.SUMMARIZE: frozenset(
             {
+                InvestigationStatus.HUMAN_REVIEW,
                 InvestigationStatus.DONE,
                 InvestigationStatus.BLOCKED,
                 InvestigationStatus.FAILED,
