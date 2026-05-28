@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Sequence
 
@@ -15,7 +16,6 @@ from cloud_incident_rca_agent.runtime import (
     LLMTask,
     build_llm_client,
     invoke_llm_task,
-    llm_settings_from_env,
 )
 
 
@@ -32,11 +32,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _run_llm_invoke(args: argparse.Namespace) -> int:
-    base_settings = llm_settings_from_env()
+    provider = LLMProvider(
+        args.provider or os.environ.get("CLOUD_RCA_LLM_PROVIDER", LLMProvider.FAKE.value)
+    )
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
     settings = LLMRuntimeSettings(
-        provider=LLMProvider(args.provider) if args.provider else base_settings.provider,
-        openai_api_key=base_settings.openai_api_key,
-        openai_model=args.model or base_settings.openai_model,
+        provider=provider,
+        openai_api_key=openai_api_key if openai_api_key and openai_api_key.strip() else None,
+        openai_model=args.model or os.environ.get("OPENAI_MODEL") or "gpt-4.1-mini",
     )
     client = build_llm_client(settings)
     result = await invoke_llm_task(

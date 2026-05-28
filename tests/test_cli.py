@@ -21,6 +21,27 @@ def test_cli_invokes_fake_normalize_and_prints_json(capsys) -> None:
     assert output["payload"]["normalized_summary"] == "checkout API returns 500"
 
 
+def test_cli_fake_provider_override_ignores_invalid_openai_env(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("CLOUD_RCA_LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    exit_code = main(
+        [
+            "llm-invoke",
+            "--provider",
+            "fake",
+            "--task",
+            "normalize",
+            "checkout API returns 500",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["task"] == "normalize"
+    assert output["payload"]["normalized_summary"] == "checkout API returns 500"
+
+
 def test_cli_returns_error_for_openai_without_api_key(monkeypatch, capsys) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
