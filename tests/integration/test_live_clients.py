@@ -5,6 +5,11 @@ import pytest
 from cloud_incident_rca_agent.connectors import MySQLMCPConnector
 from cloud_incident_rca_agent.domain import ToolIntent, ToolTarget
 from cloud_incident_rca_agent.llm import OpenAILLMClient
+from cloud_incident_rca_agent.runtime import (
+    LLMProvider,
+    build_llm_client,
+    llm_settings_from_env,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -46,3 +51,20 @@ async def test_live_mysql_connector_requires_real_mcp_adapter() -> None:
                 purpose="smoke test read-only query",
             )
         )
+
+
+@pytest.mark.skipif(
+    not os.getenv("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY is required for live OpenAI runtime smoke test",
+)
+def test_live_openai_runtime_settings_build_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_RCA_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
+
+    settings = llm_settings_from_env()
+    client = build_llm_client(settings)
+
+    assert settings.provider == LLMProvider.OPENAI
+    assert client.__class__.__name__ == "OpenAILLMClient"
