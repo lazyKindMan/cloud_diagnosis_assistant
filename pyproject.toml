@@ -17,6 +17,7 @@ test = [
 ]
 integrations = [
     "openai>=1.0,<2.0",
+    "socksio>=1.0,<2.0",
 ]
 
 [tool.pytest.ini_options]

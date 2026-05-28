@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from copy import deepcopy
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -58,6 +60,97 @@ class LLMClient(Protocol):
 
 class _HypothesisListPayload(BaseModel):
     hypotheses: list[Hypothesis]
+
+
+def _strict_json_schema(model_type: type[BaseModel]) -> dict[str, Any]:
+    """Return the JSON schema subset accepted by OpenAI strict structured outputs."""
+
+    schema = deepcopy(model_type.model_json_schema())
+    return _ensure_strict_json_schema(schema)
+
+
+def _ensure_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if schema.get("type") == "object":
+        schema.setdefault("additionalProperties", False)
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        schema["required"] = list(properties)
+        for property_schema in properties.values():
+            if isinstance(property_schema, dict):
+                _ensure_strict_json_schema(property_schema)
+
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        for def_schema in defs.values():
+            if isinstance(def_schema, dict):
+                _ensure_strict_json_schema(def_schema)
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        _ensure_strict_json_schema(items)
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list):
+        for variant in any_of:
+            if isinstance(variant, dict):
+                _ensure_strict_json_schema(variant)
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for variant in all_of:
+            if isinstance(variant, dict):
+                _ensure_strict_json_schema(variant)
+
+    if schema.get("default") is None:
+        schema.pop("default", None)
+
+    return schema
+
+
+def _has_open_object_schema(schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return False
+
+    additional_properties = schema.get("additionalProperties")
+    if additional_properties is True or isinstance(additional_properties, dict):
+        return True
+
+    for nested_key in ("properties", "$defs", "definitions"):
+        nested = schema.get(nested_key)
+        if isinstance(nested, dict) and any(
+            _has_open_object_schema(item) for item in nested.values()
+        ):
+            return True
+
+    items = schema.get("items")
+    if _has_open_object_schema(items):
+        return True
+
+    for nested_key in ("anyOf", "allOf"):
+        nested = schema.get(nested_key)
+        if isinstance(nested, list) and any(_has_open_object_schema(item) for item in nested):
+            return True
+
+    return False
+
+
+def _response_schema_name(model_type: type[BaseModel]) -> str:
+    name = model_type.__name__.strip("_") or "StructuredPayload"
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:64]
+
+
+def _response_format_for(model_type: type[BaseModel]) -> dict[str, Any]:
+    schema = model_type.model_json_schema()
+    strict = not _has_open_object_schema(schema)
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": _response_schema_name(model_type),
+            "schema": _strict_json_schema(model_type) if strict else schema,
+            "strict": strict,
+        },
+    }
 
 
 class FakeLLMClient:
@@ -172,8 +265,17 @@ class OpenAILLMClient:
 
         response = await self._client.chat.completions.create(
             model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only JSON matching the provided response schema. "
+                        "Use null or empty arrays when information is unavailable."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format=_response_format_for(model_type),
         )
         text = response.choices[0].message.content or "{}"
         try:

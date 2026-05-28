@@ -4,6 +4,7 @@ from cloud_incident_rca_agent.domain import (
     ConfidenceLevel,
     Hypothesis,
     Incident,
+    InvestigationPlan,
     RCAReport,
 )
 from cloud_incident_rca_agent.llm import FakeLLMClient, OpenAILLMClient
@@ -117,13 +118,48 @@ async def test_openai_client_invokes_api_and_validates_json_model() -> None:
         raw_description="checkout API returns 500",
         normalized_summary="checkout API returns 500 in prod",
     ).model_dump(exclude={"incident_id"})
-    assert sdk_client.chat.completions.calls == [
-        {
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "normalize this incident"}],
-            "response_format": {"type": "json_object"},
-        }
-    ]
+    assert len(sdk_client.chat.completions.calls) == 1
+    call = sdk_client.chat.completions.calls[0]
+    assert call["model"] == "test-model"
+    assert call["messages"][-1] == {"role": "user", "content": "normalize this incident"}
+    assert call["response_format"]["type"] == "json_schema"
+    assert call["response_format"]["json_schema"]["name"] == "Incident"
+    assert call["response_format"]["json_schema"]["strict"] is True
+    schema = call["response_format"]["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert "raw_description" in schema["required"]
+    assert "normalized_summary" in schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_uses_non_strict_schema_for_open_tool_parameters() -> None:
+    raw_json = """
+    {
+        "summary": "Collect checkout API error logs.",
+        "tool_intents": [
+            {
+                "target": "cls-log-mcp",
+                "tool_name": "search_logs",
+                "parameters": {"service": "checkout-api"},
+                "purpose": "Find HTTP 500 log entries"
+            }
+        ],
+        "max_tool_calls": 1,
+        "stopping_criteria": ["one relevant error log found"],
+        "requires_human_review": false,
+        "review_reason": null
+    }
+    """
+    sdk_client = RecordingOpenAIClient(raw_json)
+    client = OpenAILLMClient(api_key=None, client=sdk_client, model="test-model")
+
+    plan = await client.invoke_json("create an investigation plan", InvestigationPlan)
+
+    assert plan.tool_intents[0].parameters == {"service": "checkout-api"}
+    response_format = sdk_client.chat.completions.calls[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "InvestigationPlan"
+    assert response_format["json_schema"]["strict"] is False
 
 
 @pytest.mark.asyncio
