@@ -10,8 +10,17 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
+]
+integrations = [
+    "openai>=1.0,<2.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: tests that require live external services or credentials",
+]
