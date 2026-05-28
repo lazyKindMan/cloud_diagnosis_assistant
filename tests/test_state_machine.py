@@ -106,3 +106,37 @@ def test_human_review_can_block_when_approval_is_unavailable() -> None:
 
     assert state.current_state == InvestigationStatus.BLOCKED
     assert machine.is_terminal(state.current_state)
+
+
+def test_plan_origin_human_review_cannot_skip_to_done() -> None:
+    state = InvestigationState(incident=Incident(raw_description="checkout API returns 500"))
+    machine = InvestigationStateMachine()
+
+    for next_state in [
+        InvestigationStatus.CLASSIFY,
+        InvestigationStatus.PLAN,
+        InvestigationStatus.HUMAN_REVIEW,
+    ]:
+        machine.transition(state, next_state)
+
+    with pytest.raises(StateTransitionError, match="HUMAN_REVIEW -> DONE"):
+        machine.transition(state, InvestigationStatus.DONE)
+
+
+def test_summarize_origin_human_review_cannot_return_to_plan() -> None:
+    state = InvestigationState(incident=Incident(raw_description="orders API times out"))
+    machine = InvestigationStateMachine()
+
+    for next_state in [
+        InvestigationStatus.CLASSIFY,
+        InvestigationStatus.PLAN,
+        InvestigationStatus.COLLECT_EVIDENCE,
+        InvestigationStatus.UPDATE_HYPOTHESES,
+        InvestigationStatus.VERIFY,
+        InvestigationStatus.SUMMARIZE,
+        InvestigationStatus.HUMAN_REVIEW,
+    ]:
+        machine.transition(state, next_state)
+
+    with pytest.raises(StateTransitionError, match="HUMAN_REVIEW -> PLAN"):
+        machine.transition(state, InvestigationStatus.PLAN)

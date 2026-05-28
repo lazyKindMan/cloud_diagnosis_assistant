@@ -92,6 +92,34 @@ class InvestigationStateMachine:
         InvestigationStatus.FAILED: frozenset(),
     }
 
+    HUMAN_REVIEW_TRANSITIONS_BY_ORIGIN: Mapping[
+        InvestigationStatus, frozenset[InvestigationStatus]
+    ] = {
+        InvestigationStatus.PLAN: frozenset(
+            {
+                InvestigationStatus.PLAN,
+                InvestigationStatus.COLLECT_EVIDENCE,
+                InvestigationStatus.BLOCKED,
+                InvestigationStatus.FAILED,
+            }
+        ),
+        InvestigationStatus.VERIFY: frozenset(
+            {
+                InvestigationStatus.COLLECT_EVIDENCE,
+                InvestigationStatus.SUMMARIZE,
+                InvestigationStatus.BLOCKED,
+                InvestigationStatus.FAILED,
+            }
+        ),
+        InvestigationStatus.SUMMARIZE: frozenset(
+            {
+                InvestigationStatus.DONE,
+                InvestigationStatus.BLOCKED,
+                InvestigationStatus.FAILED,
+            }
+        ),
+    }
+
     def __init__(
         self,
         transitions: Mapping[InvestigationStatus, frozenset[InvestigationStatus]]
@@ -128,6 +156,38 @@ class InvestigationStateMachine:
             f"allowed: {allowed}"
         )
 
+    def _human_review_origin(
+        self,
+        investigation: InvestigationState,
+    ) -> InvestigationStatus | None:
+        for entry in reversed(investigation.execution_log):
+            if entry.state != InvestigationStatus.HUMAN_REVIEW:
+                return entry.state
+        return None
+
+    def _require_investigation_transition(
+        self,
+        investigation: InvestigationState,
+        next_state: InvestigationStatus,
+    ) -> None:
+        current_state = investigation.current_state
+        if current_state != InvestigationStatus.HUMAN_REVIEW:
+            self.require_transition(current_state, next_state)
+            return
+
+        origin = self._human_review_origin(investigation)
+        allowed_states = self.HUMAN_REVIEW_TRANSITIONS_BY_ORIGIN.get(origin, frozenset())
+        if next_state in allowed_states:
+            return
+
+        allowed = ", ".join(sorted(state.value for state in allowed_states))
+        if not allowed:
+            allowed = "no further states"
+        raise StateTransitionError(
+            f"invalid transition {current_state.value} -> {next_state.value}; "
+            f"allowed: {allowed}"
+        )
+
     def transition(
         self,
         investigation: InvestigationState,
@@ -137,7 +197,7 @@ class InvestigationStateMachine:
     ) -> InvestigationState:
         """Apply a validated transition to an investigation state."""
 
-        self.require_transition(investigation.current_state, next_state)
+        self._require_investigation_transition(investigation, next_state)
         investigation.current_state = next_state
         investigation.execution_log.append(
             ExecutionLogEntry(
