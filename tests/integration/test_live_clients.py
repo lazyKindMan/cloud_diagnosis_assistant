@@ -62,9 +62,18 @@ def test_live_openai_runtime_settings_build_client(
 ) -> None:
     monkeypatch.setenv("CLOUD_RCA_LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
+    for proxy_env_var in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.delenv(proxy_env_var, raising=False)
 
     settings = llm_settings_from_env()
     client = build_llm_client(settings)
 
     assert settings.provider == LLMProvider.OPENAI
-    assert client.__class__.__name__ == "OpenAILLMClient"
+    assert isinstance(client, OpenAILLMClient)
