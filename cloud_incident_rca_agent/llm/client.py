@@ -120,7 +120,7 @@ class FakeLLMClient:
                 incident_summary=incident.normalized_summary or incident.raw_description,
                 most_likely_root_cause="Root cause not confirmed",
                 confidence_level=ConfidenceLevel.LOW,
-                supporting_evidence=[],
+                supporting_evidence=[item.summary for item in evidence if not item.sensitive],
                 ruled_out_alternatives=[],
                 remaining_unknowns=remaining_unknowns,
                 recommended_next_actions=["collect more evidence before remediation"],
