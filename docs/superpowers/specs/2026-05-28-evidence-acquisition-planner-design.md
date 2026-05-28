@@ -23,6 +23,8 @@ controlled replanning loops and explicit stop reasons.
 
 The first implementation slice is intentionally constrained:
 
+- memory is scoped to one RCA investigation session and is persisted only so the
+  same investigation can resume, compact context, and avoid repeated work;
 - local code inspection executes against the current workspace;
 - SQL is generated, validated, and emitted as dry-run evidence, but not executed
   against a real database;
@@ -38,6 +40,7 @@ The first implementation slice is intentionally constrained:
   slice.
 - Do not execute write operations or remediation.
 - Do not let the LLM read arbitrary files or issue arbitrary SQL.
+- Do not build cross-incident long-term learning or vector memory in this slice.
 - Do not replace the plain Python orchestrator with an agent framework.
 
 ## Current Gaps
@@ -67,6 +70,13 @@ The orchestrator can block or summarize, but it does not yet loop through a new
 evidence plan when the current evidence is insufficient. It also lacks explicit
 replan round limits, duplicate request prevention, and structured stop reasons.
 
+### Session And Memory
+
+The agent does not yet have a durable single-investigation session. It cannot
+resume an interrupted RCA, compact prior context before the next LLM call, or
+record request fingerprints across rounds to prevent repeated log, code, and SQL
+work.
+
 ## Architecture
 
 Add an evidence acquisition layer between the existing `Planner` and connector
@@ -86,6 +96,12 @@ Core units:
 - `LocalCodeInspector`: searches and reads bounded snippets from the workspace.
 - `LocalLogInspector`: filters allowed local log files by query constraints.
 - `SqlDryRunValidator`: validates generated SQL and emits safe dry-run evidence.
+- `AgentSessionManager`: creates, checkpoints, loads, and resumes one RCA
+  session using local file storage in the first slice.
+- `InvestigationMemory`: stores working memory, round history, stable facts, and
+  request fingerprints for one RCA session.
+- `ContextBuilder`: compacts session memory into a bounded prompt context for
+  LLM planning, hypothesis updates, and report generation.
 - Playbook prompts: guide LLM planning for log acquisition, code inspection, SQL
   validation, and replanning without owning execution flow.
 
@@ -207,6 +223,70 @@ Enum values:
 - `policy_blocked`
 - `repeated_failed_requests`
 
+### AgentSession
+
+Represents one recoverable RCA investigation.
+
+Fields:
+
+- `session_id`: generated id.
+- `created_at`: session creation timestamp.
+- `updated_at`: last checkpoint timestamp.
+- `raw_incident`: original incident text.
+- `current_state`: current investigation state.
+- `status`: `running`, `pending_review`, `done`, `blocked`, or `failed`.
+- `round_number`: current evidence planning round.
+- `budgets`: configured and remaining investigation budgets.
+- `memory`: single-session investigation memory.
+- `checkpoint_version`: monotonically increasing checkpoint version.
+
+### InvestigationMemory
+
+Stores memory for a single RCA session only.
+
+Fields:
+
+- `working_summary`: compact summary of the current investigation.
+- `stable_facts`: service names, routes, table names, trace ids, time windows,
+  schema context, and other facts that have survived evidence review.
+- `rounds`: ordered summaries of each planning and evidence collection round.
+- `attempted_request_fingerprints`: normalized fingerprints for log, code, and
+  SQL requests already attempted.
+- `failed_request_fingerprints`: fingerprints of failed or policy-blocked
+  requests.
+- `open_questions`: unresolved questions that justify replanning.
+- `context_token_budget`: maximum approximate context size for the next LLM
+  planning prompt.
+
+### RoundMemory
+
+Records what happened in one planning round.
+
+Fields:
+
+- `round_number`: round index.
+- `plan_id`: evidence acquisition plan id.
+- `objective`: round objective.
+- `request_results`: normalized request outcomes.
+- `new_evidence_ids`: evidence produced by the round.
+- `hypothesis_summary`: compact hypothesis changes after the round.
+- `stop_reason`: reason this round stopped or continued.
+
+### ContextPacket
+
+Represents the bounded context sent to the LLM.
+
+Fields:
+
+- `incident_summary`: compact incident description.
+- `current_hypotheses`: highest-value hypotheses and confidence scores.
+- `recent_evidence_summary`: evidence from recent rounds.
+- `stable_facts`: durable facts useful for planning.
+- `open_questions`: missing evidence to target next.
+- `attempted_requests`: compact list of prior request fingerprints.
+- `remaining_budgets`: plan rounds, tool calls, code bytes, SQL statements, and
+  request limits.
+
 ## Evidence Planning Rules
 
 Every evidence request must answer a concrete question and name the hypothesis or
@@ -251,6 +331,101 @@ Default budgets:
 The loop stops when confidence is high enough, budgets are exhausted, no new
 evidence was produced, a policy block occurs, repeated failures occur, or human
 review is required.
+
+Every state transition and evidence round should checkpoint the current
+`AgentSession`. A resumed session must continue from the saved state, preserve
+request fingerprints, and retain remaining budgets.
+
+## Agent Session And Memory Management
+
+The first slice should feel agent-like without becoming an unconstrained agent.
+Memory is scoped to one RCA investigation session. It exists to resume work,
+compress prompt context, explain progress, and prevent repeated work.
+
+### Session Storage
+
+Use a local JSON session store in the first slice.
+
+Responsibilities:
+
+- create a new session from raw incident text;
+- checkpoint after each state transition and completed evidence round;
+- load a session by `session_id`;
+- resume from `pending_review`, `running`, or interrupted states;
+- reject resume for incompatible `checkpoint_version` values with a clear error.
+
+No external database is required for session storage in this phase.
+
+### Memory Layers
+
+Working memory contains the current incident, active plan, hypotheses, evidence,
+request results, open questions, and remaining budgets.
+
+Round memory contains compact per-round history: what was planned, what ran,
+what produced evidence, what failed, and why the agent continued or stopped.
+
+Stable facts contain durable values discovered during the investigation, such as
+service name, API route, trace id, project/logstore hints, table names, field
+names, schema context, and code entrypoints.
+
+Prompt context memory is a compact `ContextPacket` built from the larger session
+state. The LLM should receive the packet instead of the full raw history.
+
+### Context Compaction
+
+`ContextBuilder` must keep LLM inputs bounded.
+
+It should include:
+
+- incident summary;
+- top hypotheses and confidence;
+- recent evidence summaries;
+- stable facts relevant to the next round;
+- unresolved questions;
+- attempted request fingerprints;
+- remaining budgets.
+
+It should exclude:
+
+- full file contents;
+- full log files;
+- repeated historical evidence;
+- sensitive raw payloads;
+- unrelated execution log noise.
+
+When context exceeds the configured approximate budget, older round details are
+summarized into `working_summary` while preserving stable facts, open questions,
+and request fingerprints.
+
+### Request Fingerprints
+
+Each request should have a deterministic fingerprint used for duplicate
+prevention:
+
+- log fingerprint: route, service, time window, trace id, normalized keywords,
+  query, and local path hint;
+- code fingerprint: normalized search terms, path allowlist, file globs, and
+  selected file paths;
+- SQL fingerprint: normalized SQL, tables, validation purpose, and parameter
+  names.
+
+Replanning must not repeat an equivalent fingerprint unless the new request
+explains the new evidence or changed constraint that makes repetition useful.
+
+### Agent-Facing Operations
+
+The runtime surface should eventually expose operations that make the system
+feel like a controlled agent:
+
+- start an RCA session;
+- inspect current session status;
+- resume a paused session;
+- approve or reject a pending review;
+- show memory summary and attempted requests;
+- export final RCA report and investigation trace.
+
+These operations still call code-controlled state transitions and executors.
+They do not allow the LLM to call tools directly.
 
 ## Log Evidence Strategy
 
@@ -390,6 +565,12 @@ reasons, and request result states.
 Verify max round enforcement, per-round request limits, confidence threshold,
 duplicate request blocking, no-new-evidence handling, and human review triggers.
 
+### Session And Memory Tests
+
+Verify session creation, checkpoint persistence, resume behavior, checkpoint
+version validation, context compaction, stable fact retention, open question
+retention, and duplicate request fingerprint blocking across replans.
+
 ### Local Code Tests
 
 Verify search term execution, path allowlist enforcement, secret file exclusion,
@@ -430,12 +611,14 @@ Add at least three fixture-backed scenarios:
 ### Phase 1: Evidence Planner Foundation
 
 Implement evidence plan domain models, policy decisions, SQL validator, local
-code inspector, local log inspector, and fake-backed orchestrator replan flow.
+code inspector, local log inspector, local JSON session storage, single-session
+memory, context compaction, and fake-backed orchestrator replan flow.
 
 ### Phase 2: Runtime Surface
 
 Expose evidence planning and RCA run commands through CLI, including JSON output
-for plan rounds, request results, evidence, stop reason, and report.
+for session id, plan rounds, request results, evidence, memory summary, stop
+reason, and report.
 
 ### Phase 3: Live Integration
 
@@ -452,6 +635,8 @@ This design is implemented when:
 - log requests can filter local files and represent `cls-log-mcp` or Chrome MCP
   plans;
 - the orchestrator can replan up to a configured max round count;
+- a single RCA session can checkpoint, resume, compact memory, and prevent
+  duplicate requests across rounds;
 - stop reasons are explicit in the run result;
 - policy prevents broad file reads, broad log searches, unsafe SQL, duplicate
   requests, and unbounded loops;
