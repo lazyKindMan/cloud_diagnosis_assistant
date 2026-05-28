@@ -62,6 +62,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     parser.error(f"unsupported command: {args.command}")
     return 2
 
