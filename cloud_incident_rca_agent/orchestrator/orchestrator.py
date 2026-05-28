@@ -118,6 +118,12 @@ class CloudIncidentRCAOrchestrator:
                         state=state,
                         blocked_reason="missing investigation plan",
                     )
+                if state.is_tool_budget_exhausted:
+                    self._state_machine.transition(state, InvestigationStatus.BLOCKED)
+                    return OrchestratorRunResult(
+                        state=state,
+                        blocked_reason="tool budget exhausted before evidence collection",
+                    )
                 for intent in self._current_plan.tool_intents:
                     if state.is_tool_budget_exhausted:
                         break

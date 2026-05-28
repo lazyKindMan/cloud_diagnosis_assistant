@@ -1,6 +1,8 @@
 import pytest
 
 from cloud_incident_rca_agent.domain import (
+    ConnectorError,
+    ConnectorErrorCategory,
     Evidence,
     EvidenceSource,
     HumanReviewDecision,
@@ -111,3 +113,48 @@ async def test_orchestrator_replans_after_review_rejection() -> None:
 
     assert resumed.state.current_state == "PLAN"
     assert resumed.pending_review is None
+
+
+class PermanentFailureConnector:
+    async def execute(self, intent: ToolIntent) -> ToolResult:
+        return ToolResult(
+            intent_id=intent.intent_id,
+            success=False,
+            connector_error=ConnectorError(
+                category=ConnectorErrorCategory.PERMANENT,
+                message="MCP server unavailable",
+            ),
+        )
+
+
+class ZeroBudgetLLMClient(FakeLLMClient):
+    async def create_plan(self, incident: Incident) -> InvestigationPlan:
+        plan = await super().create_plan(incident)
+        plan.max_tool_calls = 0
+        return plan
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_blocks_on_permanent_connector_failure() -> None:
+    orchestrator = CloudIncidentRCAOrchestrator.with_defaults(
+        llm_client=FakeLLMClient(),
+        connectors={"cls-log-mcp": PermanentFailureConnector()},
+    )
+
+    result = await orchestrator.run("checkout API returns 500")
+
+    assert result.state.current_state == "BLOCKED"
+    assert result.blocked_reason == "MCP server unavailable"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_blocks_when_plan_has_no_tool_budget() -> None:
+    orchestrator = CloudIncidentRCAOrchestrator.with_defaults(
+        llm_client=ZeroBudgetLLMClient(),
+        connectors={"cls-log-mcp": FakeConnector()},
+    )
+
+    result = await orchestrator.run("checkout API returns 500")
+
+    assert result.state.current_state == "BLOCKED"
+    assert result.blocked_reason == "tool budget exhausted before evidence collection"
