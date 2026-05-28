@@ -108,7 +108,9 @@ class CloudIncidentRCAOrchestrator:
                         state=state,
                         pending_review=self._pending_review,
                     )
-                self._apply_review_decision(state, review_decision)
+                outcome = self._apply_review_decision(state, review_decision)
+                if outcome == "rejected":
+                    return OrchestratorRunResult(state=state)
             elif state.current_state == InvestigationStatus.COLLECT_EVIDENCE:
                 if self._current_plan is None:
                     self._state_machine.transition(state, InvestigationStatus.BLOCKED)
@@ -159,10 +161,10 @@ class CloudIncidentRCAOrchestrator:
         self,
         state: InvestigationState,
         decision: HumanReviewDecision,
-    ) -> None:
+    ) -> str:
         if decision.status == HumanReviewDecisionStatus.REJECTED:
             self._state_machine.transition(state, InvestigationStatus.PLAN)
-            return
+            return "rejected"
         if decision.status == HumanReviewDecisionStatus.APPROVED_WITH_MODIFICATIONS:
             if self._current_plan is not None:
                 self._current_plan.tool_intents = decision.modified_tool_intents
@@ -170,3 +172,4 @@ class CloudIncidentRCAOrchestrator:
         if self._current_plan is not None:
             self._apply_plan_budget(state, self._current_plan)
         self._state_machine.transition(state, InvestigationStatus.COLLECT_EVIDENCE)
+        return "approved"
