@@ -63,6 +63,27 @@ def test_cli_returns_runtime_error_for_provider_setup_failure(monkeypatch, capsy
     assert "provider unavailable" in capsys.readouterr().err
 
 
+def test_cli_returns_runtime_error_for_invocation_value_error(monkeypatch, capsys) -> None:
+    async def fail_invoke_llm_task(_client, _request):
+        raise ValueError("LLM output failed schema validation: invalid json")
+
+    monkeypatch.setattr("cloud_incident_rca_agent.cli.invoke_llm_task", fail_invoke_llm_task)
+
+    exit_code = main(
+        [
+            "llm-invoke",
+            "--provider",
+            "fake",
+            "--task",
+            "normalize",
+            "checkout API returns 500",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "LLM output failed schema validation: invalid json" in capsys.readouterr().err
+
+
 def test_cli_returns_error_for_openai_without_api_key(monkeypatch, capsys) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 

@@ -31,24 +31,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _run_llm_invoke(args: argparse.Namespace) -> int:
+def _build_llm_invoke_settings(args: argparse.Namespace) -> LLMRuntimeSettings:
     provider = LLMProvider(
         args.provider or os.environ.get("CLOUD_RCA_LLM_PROVIDER", LLMProvider.FAKE.value)
     )
     openai_api_key = os.environ.get("OPENAI_API_KEY")
-    settings = LLMRuntimeSettings(
+    return LLMRuntimeSettings(
         provider=provider,
         openai_api_key=openai_api_key if openai_api_key and openai_api_key.strip() else None,
         openai_model=args.model or os.environ.get("OPENAI_MODEL") or "gpt-4.1-mini",
     )
+
+
+async def _run_llm_invoke(settings: LLMRuntimeSettings, request: LLMInvokeRequest) -> int:
     client = build_llm_client(settings)
-    result = await invoke_llm_task(
-        client,
-        LLMInvokeRequest(
-            task=LLMTask(args.task),
-            raw_description=args.raw_description,
-        ),
-    )
+    result = await invoke_llm_task(client, request)
     print(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
     return 0
 
@@ -56,15 +53,23 @@ async def _run_llm_invoke(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    try:
-        if args.command == "llm-invoke":
-            return asyncio.run(_run_llm_invoke(args))
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    except Exception as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    if args.command == "llm-invoke":
+        try:
+            settings = _build_llm_invoke_settings(args)
+            request = LLMInvokeRequest(
+                task=LLMTask(args.task),
+                raw_description=args.raw_description,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+        try:
+            return asyncio.run(_run_llm_invoke(settings, request))
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
     parser.error(f"unsupported command: {args.command}")
     return 2
 
