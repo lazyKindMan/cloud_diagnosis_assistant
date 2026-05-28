@@ -25,6 +25,9 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+DEFAULT_REVIEW_REASON = "plan includes actions that require human approval"
+
+
 class StrictDomainModel(BaseModel):
     """Base model that rejects unknown fields to keep contracts explicit."""
 
@@ -164,12 +167,11 @@ class ConnectorError(StrictDomainModel):
 
     @model_validator(mode="after")
     def default_retryable_from_category(self) -> "ConnectorError":
-        if self.retryable is None:
-            object.__setattr__(
-                self,
-                "retryable",
-                self.category == ConnectorErrorCategory.TRANSIENT,
-            )
+        object.__setattr__(
+            self,
+            "retryable",
+            self.category == ConnectorErrorCategory.TRANSIENT,
+        )
         return self
 
 
@@ -201,23 +203,16 @@ class InvestigationPlan(StrictDomainModel):
     requires_human_review: bool = False
     review_reason: str | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def validate_tool_intents(cls, data: Any) -> Any:
-        if isinstance(data, dict) and data.get("tool_intents") == []:
-            raise ValueError("tool_intents must contain at least one intent")
-        return data
-
     @model_validator(mode="after")
     def infer_human_review_requirement(self) -> "InvestigationPlan":
-        if any(intent.requires_human_review for intent in self.tool_intents):
+        requires_review = any(intent.requires_human_review for intent in self.tool_intents)
+        if requires_review:
             object.__setattr__(self, "requires_human_review", True)
-        if self.requires_human_review and self.review_reason is None:
-            object.__setattr__(
-                self,
-                "review_reason",
-                "plan includes actions that require human approval",
-            )
+            if self.review_reason is None:
+                object.__setattr__(self, "review_reason", DEFAULT_REVIEW_REASON)
+        elif self.review_reason == DEFAULT_REVIEW_REASON:
+            object.__setattr__(self, "requires_human_review", False)
+            object.__setattr__(self, "review_reason", None)
         return self
 
 

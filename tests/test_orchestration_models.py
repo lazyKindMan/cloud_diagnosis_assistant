@@ -33,8 +33,12 @@ def test_sensitive_tool_intent_requires_human_review() -> None:
 
 
 def test_investigation_plan_rejects_empty_tool_intents() -> None:
-    with pytest.raises(ValidationError, match="at least one"):
+    with pytest.raises(ValidationError) as exc_info:
         InvestigationPlan(summary="collect initial evidence", tool_intents=[])
+
+    error = exc_info.value.errors()[0]
+    assert error["loc"] == ("tool_intents",)
+    assert error["type"] == "too_short"
 
 
 def test_investigation_plan_infers_review_requirement_and_reason() -> None:
@@ -52,6 +56,44 @@ def test_investigation_plan_infers_review_requirement_and_reason() -> None:
 
     assert plan.requires_human_review is True
     assert plan.review_reason == "plan includes actions that require human approval"
+
+
+def test_investigation_plan_clears_auto_review_when_intents_change() -> None:
+    sensitive_intent = ToolIntent(
+        target=ToolTarget.MYSQL,
+        tool_name="query",
+        purpose="inspect sensitive rows",
+        sensitive=True,
+    )
+    safe_intent = ToolIntent(
+        target=ToolTarget.CLS_LOG_MCP,
+        tool_name="search_logs_by_trace_id",
+        purpose="inspect logs",
+    )
+    plan = InvestigationPlan(summary="collect evidence", tool_intents=[sensitive_intent])
+    assert plan.requires_human_review is True
+
+    plan.tool_intents = [safe_intent]
+
+    assert plan.requires_human_review is False
+    assert plan.review_reason is None
+
+
+def test_investigation_plan_preserves_custom_review_reason_without_sensitive_intents() -> None:
+    safe_intent = ToolIntent(
+        target=ToolTarget.CLS_LOG_MCP,
+        tool_name="search_logs_by_trace_id",
+        purpose="inspect logs",
+    )
+    plan = InvestigationPlan(
+        summary="collect evidence",
+        tool_intents=[safe_intent],
+        requires_human_review=True,
+        review_reason="operator must choose path",
+    )
+
+    assert plan.requires_human_review is True
+    assert plan.review_reason == "operator must choose path"
 
 
 def test_tool_intent_rejects_extra_fields() -> None:
@@ -86,6 +128,18 @@ def test_connector_error_retryable_defaults_from_category() -> None:
     assert permanent.retryable is False
     assert semantic.retryable is False
     assert policy.retryable is False
+
+
+def test_connector_error_retryable_updates_when_category_changes() -> None:
+    error = ConnectorError(
+        category=ConnectorErrorCategory.TRANSIENT,
+        message="timeout",
+    )
+    assert error.retryable is True
+
+    error.category = ConnectorErrorCategory.PERMANENT
+
+    assert error.retryable is False
 
 
 def test_tool_result_requires_evidence_for_success_and_error_for_failure() -> None:
