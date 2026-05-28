@@ -62,6 +62,23 @@ def test_terminal_states_have_no_next_states() -> None:
     assert machine.next_states(InvestigationStatus.FAILED) == frozenset()
 
 
+def test_human_review_helpers_fail_closed_without_origin_context() -> None:
+    machine = InvestigationStateMachine()
+
+    assert (
+        machine.can_transition(
+            InvestigationStatus.HUMAN_REVIEW,
+            InvestigationStatus.DONE,
+        )
+        is False
+    )
+    with pytest.raises(StateTransitionError, match="HUMAN_REVIEW -> DONE"):
+        machine.require_transition(
+            InvestigationStatus.HUMAN_REVIEW,
+            InvestigationStatus.DONE,
+        )
+
+
 def test_plan_can_enter_human_review_and_continue_when_approved() -> None:
     state = InvestigationState(incident=Incident(raw_description="checkout API returns 500"))
     machine = InvestigationStateMachine()

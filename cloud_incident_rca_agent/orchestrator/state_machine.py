@@ -69,16 +69,7 @@ class InvestigationStateMachine:
                 InvestigationStatus.FAILED,
             }
         ),
-        InvestigationStatus.HUMAN_REVIEW: frozenset(
-            {
-                InvestigationStatus.PLAN,
-                InvestigationStatus.COLLECT_EVIDENCE,
-                InvestigationStatus.SUMMARIZE,
-                InvestigationStatus.DONE,
-                InvestigationStatus.BLOCKED,
-                InvestigationStatus.FAILED,
-            }
-        ),
+        InvestigationStatus.HUMAN_REVIEW: frozenset(),
         InvestigationStatus.SUMMARIZE: frozenset(
             {
                 InvestigationStatus.HUMAN_REVIEW,
