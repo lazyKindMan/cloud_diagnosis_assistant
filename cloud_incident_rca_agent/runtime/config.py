@@ -28,8 +28,12 @@ class LLMRuntimeSettings(BaseModel):
     openai_model: str = Field(default="gpt-4.1-mini", min_length=1)
 
     @model_validator(mode="after")
-    def require_openai_key_for_openai_provider(self) -> "LLMRuntimeSettings":
-        if self.provider == LLMProvider.OPENAI and not self.openai_api_key:
+    def validate_openai_settings(self) -> "LLMRuntimeSettings":
+        if not self.openai_model.strip():
+            raise ValueError("OPENAI_MODEL must not be blank")
+        if self.openai_api_key is not None and not self.openai_api_key.strip():
+            raise ValueError("OPENAI_API_KEY must not be blank")
+        if self.provider == LLMProvider.OPENAI and self.openai_api_key is None:
             raise ValueError("OPENAI_API_KEY is required when CLOUD_RCA_LLM_PROVIDER=openai")
         return self
 
@@ -39,7 +43,7 @@ def llm_settings_from_env(environ: dict[str, str] | None = None) -> LLMRuntimeSe
 
     source = os.environ if environ is None else environ
     return LLMRuntimeSettings(
-        provider=LLMProvider(source.get("CLOUD_RCA_LLM_PROVIDER", LLMProvider.FAKE.value)),
+        provider=source.get("CLOUD_RCA_LLM_PROVIDER", LLMProvider.FAKE.value),
         openai_api_key=source.get("OPENAI_API_KEY"),
         openai_model=source.get("OPENAI_MODEL", "gpt-4.1-mini"),
     )

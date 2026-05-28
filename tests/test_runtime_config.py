@@ -40,6 +40,16 @@ def test_openai_settings_require_api_key() -> None:
         LLMRuntimeSettings(provider=LLMProvider.OPENAI, openai_api_key=None)
 
 
+def test_openai_settings_reject_blank_api_key() -> None:
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        LLMRuntimeSettings(provider=LLMProvider.OPENAI, openai_api_key="   ")
+
+
+def test_llm_settings_reject_blank_openai_model() -> None:
+    with pytest.raises(ValueError, match="OPENAI_MODEL"):
+        LLMRuntimeSettings(openai_model="   ")
+
+
 def test_build_llm_client_returns_fake_client_by_default() -> None:
     client = build_llm_client(LLMRuntimeSettings(provider=LLMProvider.FAKE))
 
