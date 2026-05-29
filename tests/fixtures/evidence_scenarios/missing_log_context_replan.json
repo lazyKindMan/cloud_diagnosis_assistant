@@ -1,0 +1,6 @@
+{
+  "focus": "replan",
+  "incident": "users see intermittent checkout failures without trace id or time window",
+  "expected_requests": ["log", "code"],
+  "expected_stop_reason": "no_new_evidence"
+}

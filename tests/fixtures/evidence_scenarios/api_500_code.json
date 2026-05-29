@@ -1,0 +1,6 @@
+{
+  "focus": "code",
+  "incident": "checkout API returns 500 during order creation",
+  "expected_requests": ["code"],
+  "expected_stop_reason": "root_cause_confident"
+}

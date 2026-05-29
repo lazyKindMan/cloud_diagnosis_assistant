@@ -1,0 +1,6 @@
+{
+  "focus": "sql",
+  "incident": "order write succeeds in API response but record is missing from database",
+  "expected_requests": ["code", "sql"],
+  "expected_stop_reason": "root_cause_confident"
+}
