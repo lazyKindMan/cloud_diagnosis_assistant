@@ -1,6 +1,7 @@
 """State-machine and orchestration primitives for the RCA agent."""
 
 from cloud_incident_rca_agent.orchestrator.context_builder import ContextBuilder
+from cloud_incident_rca_agent.orchestrator.evidence_executor import EvidenceExecutor
 from cloud_incident_rca_agent.orchestrator.evidence_policy import EvidenceAcquisitionPolicy
 from cloud_incident_rca_agent.orchestrator.hypothesis_manager import HypothesisManager
 from cloud_incident_rca_agent.orchestrator.orchestrator import CloudIncidentRCAOrchestrator
@@ -16,6 +17,7 @@ __all__ = [
     "CloudIncidentRCAOrchestrator",
     "ContextBuilder",
     "EvidenceAcquisitionPolicy",
+    "EvidenceExecutor",
     "HypothesisManager",
     "InvestigationStateMachine",
     "Planner",
