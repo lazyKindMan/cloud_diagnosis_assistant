@@ -12,8 +12,10 @@ from cloud_incident_rca_agent.runtime.llm_invoke import (
     LLMTask,
     invoke_llm_task,
 )
+from cloud_incident_rca_agent.runtime.session import AgentSessionManager
 
 __all__ = [
+    "AgentSessionManager",
     "LLMInvokeRequest",
     "LLMInvokeResult",
     "LLMProvider",
