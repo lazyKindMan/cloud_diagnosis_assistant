@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from cloud_incident_rca_agent.connectors import MCPConnector
 from cloud_incident_rca_agent.domain import (
+    AgentSession,
     ConnectorErrorCategory,
     HumanReviewDecision,
     HumanReviewDecisionStatus,
@@ -15,9 +16,12 @@ from cloud_incident_rca_agent.domain import (
     InvestigationState,
     InvestigationStatus,
     OrchestratorRunResult,
+    ReplanAction,
+    RoundMemory,
     ToolTarget,
 )
 from cloud_incident_rca_agent.llm import LLMClient
+from cloud_incident_rca_agent.orchestrator.evidence_policy import EvidenceAcquisitionPolicy
 from cloud_incident_rca_agent.orchestrator.hypothesis_manager import HypothesisManager
 from cloud_incident_rca_agent.orchestrator.planner import Planner
 from cloud_incident_rca_agent.orchestrator.report_builder import ReportBuilder
@@ -46,6 +50,9 @@ class CloudIncidentRCAOrchestrator:
         self._state_machine = state_machine or InvestigationStateMachine()
         self._current_plan: InvestigationPlan | None = None
         self._pending_review: HumanReviewRequest | None = None
+        self._evidence_planner = None
+        self._evidence_executor = None
+        self._evidence_policy: EvidenceAcquisitionPolicy | None = None
 
     @classmethod
     def with_defaults(
@@ -74,6 +81,103 @@ class CloudIncidentRCAOrchestrator:
     ) -> OrchestratorRunResult:
         state = InvestigationState(incident=Incident(raw_description=raw_description))
         return await self.run_state(state, review_decision=review_decision)
+
+    def enable_evidence_planning(
+        self,
+        *,
+        evidence_planner,
+        evidence_executor,
+        evidence_policy: EvidenceAcquisitionPolicy,
+    ) -> None:
+        self._evidence_planner = evidence_planner
+        self._evidence_executor = evidence_executor
+        self._evidence_policy = evidence_policy
+
+    async def run_session(self, session: AgentSession) -> OrchestratorRunResult:
+        state = InvestigationState(incident=Incident(raw_description=session.raw_incident))
+        if (
+            self._evidence_planner is None
+            or self._evidence_executor is None
+            or self._evidence_policy is None
+        ):
+            return await self.run_state(state)
+
+        state.incident = await self._llm_client.normalize_incident(
+            state.incident.raw_description
+        )
+        self._state_machine.transition(state, InvestigationStatus.CLASSIFY)
+        state.incident = await self._llm_client.classify_incident(state.incident)
+        self._state_machine.transition(state, InvestigationStatus.PLAN)
+
+        plan = await self._evidence_planner.create_plan(session)
+        self._state_machine.transition(state, InvestigationStatus.COLLECT_EVIDENCE)
+        request_results = []
+        for request in plan.requests[: plan.max_requests]:
+            policy_result = self._evidence_policy.validate_request(session, request)
+            if policy_result is not None:
+                request_results.append(policy_result)
+                continue
+
+            request_results.append(await self._evidence_executor.execute(request))
+            state.tool_call_count += 1
+            fingerprint = self._evidence_policy.fingerprint(request)
+            if fingerprint not in session.memory.attempted_request_fingerprints:
+                session.memory.attempted_request_fingerprints.append(fingerprint)
+
+        new_evidence_ids = []
+        for request_result in request_results:
+            if request_result.success:
+                state.evidence_list.extend(request_result.evidence)
+                new_evidence_ids.extend(item.evidence_id for item in request_result.evidence)
+
+        self._state_machine.transition(state, InvestigationStatus.UPDATE_HYPOTHESES)
+        state.hypothesis_list = await self._hypothesis_manager.update(
+            incident=state.incident,
+            existing_hypotheses=state.hypothesis_list,
+            evidence=state.evidence_list,
+        )
+        self._state_machine.transition(state, InvestigationStatus.VERIFY)
+
+        decision = self._evidence_policy.decide_after_round(
+            session=session,
+            request_results=request_results,
+            top_confidence=max(
+                (item.confidence for item in state.hypothesis_list),
+                default=0.0,
+            ),
+        )
+        session.memory.rounds.append(
+            RoundMemory(
+                round_number=session.round_number,
+                plan_id=plan.plan_id,
+                objective=plan.objective,
+                request_results=request_results,
+                new_evidence_ids=new_evidence_ids,
+                hypothesis_summary="Evidence planning round completed.",
+                stop_reason=decision.reason,
+            )
+        )
+
+        if decision.action == ReplanAction.REPLAN:
+            session.round_number += 1
+            self._state_machine.transition(state, InvestigationStatus.COLLECT_EVIDENCE)
+            return OrchestratorRunResult(state=state)
+        if decision.action == ReplanAction.HUMAN_REVIEW:
+            self._state_machine.transition(state, InvestigationStatus.HUMAN_REVIEW)
+            return OrchestratorRunResult(state=state)
+        if decision.action == ReplanAction.BLOCK:
+            self._state_machine.transition(state, InvestigationStatus.BLOCKED)
+            return OrchestratorRunResult(state=state, blocked_reason=decision.reason.value)
+
+        self._state_machine.transition(state, InvestigationStatus.SUMMARIZE)
+        report = await self._report_builder.build(
+            incident=state.incident,
+            hypotheses=state.hypothesis_list,
+            evidence=state.evidence_list,
+            remaining_unknowns=session.memory.open_questions,
+        )
+        self._state_machine.transition(state, InvestigationStatus.DONE)
+        return OrchestratorRunResult(state=state, report=report)
 
     async def run_state(
         self,
