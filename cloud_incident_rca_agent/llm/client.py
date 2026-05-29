@@ -11,7 +11,9 @@ from pydantic import BaseModel, ValidationError
 
 from cloud_incident_rca_agent.domain import (
     ConfidenceLevel,
+    ContextPacket,
     Evidence,
+    EvidenceAcquisitionPlan,
     Hypothesis,
     Incident,
     InvestigationPlan,
@@ -34,6 +36,10 @@ class LLMClient(Protocol):
 
     async def create_plan(self, incident: Incident) -> InvestigationPlan:
         """Return a bounded investigation plan."""
+        ...
+
+    async def create_evidence_plan(self, context: ContextPacket) -> EvidenceAcquisitionPlan:
+        """Return a bounded evidence acquisition plan for the current session context."""
         ...
 
     async def update_hypotheses(
@@ -184,6 +190,26 @@ class FakeLLMClient:
             stopping_criteria=["one relevant evidence item collected"],
         )
 
+    async def create_evidence_plan(self, context: ContextPacket) -> EvidenceAcquisitionPlan:
+        from cloud_incident_rca_agent.domain import CodeEvidenceRequest
+
+        return EvidenceAcquisitionPlan(
+            round_number=1,
+            objective="Collect bounded code, log, or SQL evidence for the incident.",
+            requests=[
+                CodeEvidenceRequest(
+                    hypothesis_ref="initial code path hypothesis",
+                    question="Which local code path is most related to the incident?",
+                    expected_signal="Relevant handler, service, or repository code",
+                    search_terms=[context.incident_summary.split()[0]],
+                    path_allowlist=["cloud_incident_rca_agent"],
+                    file_globs=["*.py"],
+                )
+            ],
+            max_requests=1,
+            stop_conditions=["one bounded evidence request completes"],
+        )
+
     async def update_hypotheses(
         self,
         *,
@@ -304,6 +330,14 @@ class OpenAILLMClient:
             f"InvestigationPlan schema. Incident: {incident.model_dump(mode='json')}"
         )
         return await self.invoke_json(prompt, InvestigationPlan)
+
+    async def create_evidence_plan(self, context: ContextPacket) -> EvidenceAcquisitionPlan:
+        prompt = (
+            "Create a bounded evidence acquisition plan as JSON matching the "
+            "EvidenceAcquisitionPlan schema. Do not request broad searches. "
+            f"Context: {context.model_dump(mode='json')}"
+        )
+        return await self.invoke_json(prompt, EvidenceAcquisitionPlan)
 
     async def update_hypotheses(
         self,
